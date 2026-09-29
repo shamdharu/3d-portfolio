@@ -668,13 +668,24 @@ const ray=new THREE.Raycaster(),mNDC=new THREE.Vector2(),trPool=[],_o=new THREE.
 for(let i=0;i<16;i++){const m=new THREE.Mesh(new THREE.BoxGeometry(.12,.12,1),new THREE.MeshBasicMaterial({color:0xfff0a0,fog:false}));m.visible=false;m.userData.l=0;scene.add(m);trPool.push(m)}
 function tracer(a,b){const m=trPool[trI++%16];m.position.copy(a).add(b).multiplyScalar(.5);m.scale.z=a.distanceTo(b);m.lookAt(b);m.material.color.setHex(WP[cur].col);m.userData.l=.07;m.visible=true}
 let ac;function snd(f,d,ty){try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();const t=ac.currentTime,o=ac.createOscillator(),g=ac.createGain();o.type=ty;o.frequency.setValueAtTime(f,t);o.frequency.exponentialRampToValueAtTime(40,t+d);g.gain.setValueAtTime(.07,t);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g);g.connect(ac.destination);o.start();o.stop(t+d)}catch(e){}}
+const _g=new THREE.Vector3();
+function aimGun(){
+  if(cur<0)return;
+  camera.updateMatrixWorld();
+  ray.setFromCamera(mNDC.set(mouse.x,mouse.y),camera);
+  _e.copy(ray.ray.direction).multiplyScalar(80).add(ray.ray.origin);
+  gun.getWorldPosition(_g);
+  const dx=_e.x-_g.x,dy=_e.y-_g.y,dz=_e.z-_g.z,L=Math.hypot(dx,dy,dz)||1;
+  gun.rotation.order='YXZ';
+  gun.rotation.set(Math.max(-.7,Math.min(.7,-Math.asin(dy/L))),Math.atan2(dx,dz)-heading,0);
+}
 function shoot(dt){
   cd-=dt;
   for(const m of trPool)if(m.visible){m.userData.l-=dt;if(m.userData.l<=0)m.visible=false}
-  if(!mouse.down||gameOver||cd>0)return;
+  aimGun();if(!mouse.down||gameOver||cd>0)return;
   if(cur<0){toast('No weapon yet');cd=3;return}
   if(ammo<=0){toast('Out of ammo');cd=2;return}const w=WP[cur];cd=w.cd;ammo--;updateHud();camera.updateMatrixWorld();
-  _o.set(car.position.x+dir.x*1.5,car.position.y+2,car.position.z+dir.z*1.5);
+  gun.getWorldPosition(_o);_g.copy(_e).sub(_o).normalize().multiplyScalar(1.7);_o.add(_g);
   for(let p=0;p<w.n_;p++){
     mNDC.set(mouse.x+(Math.random()-.5)*w.sp,mouse.y+(Math.random()-.5)*w.sp);
     ray.setFromCamera(mNDC,camera);
@@ -688,7 +699,7 @@ function shoot(dt){
     _e.copy(rd).multiplyScalar(best?bt:w.rg).add(ro);
     tracer(_o,_e);if(best)hitGiant(best,w.dmg);
   }
-  gun.rotation.y=Math.atan2(_e.x-_o.x,_e.z-_o.z)-heading;
+  
   snd(w.f,.13,w.ty);
 }
 
