@@ -454,6 +454,7 @@ const giants=[0,1,2,3,4].map(makeGiant);
     const idleClip=findClip(['Idle','Idle_Combat','Unarmed_Idle','Idle_B']);
     const deathClip=findClip(['Death_A','Death_B','Death_C_Skeletons','Death']);
     const hitClip=findClip(['Hit_A','Hit_B','Block_Hit']);
+    const attackClip=findClip(['1H_Melee_Attack_Chop','1H_Melee_Attack_Slice_Diagonal','1H_Melee_Attack_Slice_Horizontal','2H_Melee_Attack_Chop','2H_Melee_Attack_Slice','Attack']);
     const cols=[0xe8e0d0,0xd0c8b8,0xc8d0c0,0xe0d0c0,0xb8b0a8];
     giants.forEach((G,gi)=>{
       // CRITICAL: use SkeletonUtils.clone for skinned meshes
@@ -503,8 +504,10 @@ const giants=[0,1,2,3,4].map(makeGiant);
         run: mkAction(runClip, true),
         idle: mkAction(idleClip, true),
         death: mkAction(deathClip, false),
-        hit: mkAction(hitClip, false)
+        hit: mkAction(hitClip, false),
+        attack: mkAction(attackClip, false)
       };
+      G.atkT=0;
       if(G.actions.walk){ G.actions.walk.play(); G.curAnim='walk'; }
       else if(G.actions.run){ G.actions.run.play(); G.curAnim='run'; }
       G.ready = true;
@@ -580,8 +583,33 @@ function updateGiants(dt){
       else if(G.grace>0)G.grace-=dt;
       else{
         let df=Math.atan2(dx,dz)-G.hd;df=Math.atan2(Math.sin(df),Math.cos(df));G.hd+=Math.max(-1.5*dt,Math.min(1.5*dt,df));
-        const v=G.sp*calm*(.3+.7*Math.max(0,G.hp)/G.maxhp);G.pos.x+=Math.sin(G.hd)*v*dt;G.pos.z+=Math.cos(G.hd)*v*dt;G.ph+=v*dt*.32;mv=1;
-        if(d<6.5)caught();
+        // close range: slow in and swing with hand
+        if(d<11){
+          const v=Math.min(G.sp*0.55, 8)*calm;
+          G.pos.x+=Math.sin(G.hd)*v*dt;G.pos.z+=Math.cos(G.hd)*v*dt;
+          mv=0; // use attack anim, not walk
+          if(G.ready&&G.actions.attack){
+            if(G.curAnim!=='attack'){
+              playGiantAnim(G,'attack',0.12);
+              G.atkT=0;
+            }
+            G.atkT=(G.atkT||0)+dt;
+            // impact around mid-swing (~0.45s), then catch
+            if(G.atkT>0.45&&d<7.5){
+              caught();
+            }else if(G.atkT>1.1){
+              // swing finished, restart attack if still close
+              G.atkT=0;
+              if(G.actions.attack){G.actions.attack.reset().play();}
+            }
+          }else if(d<6.5){
+            caught();
+          }
+        }else{
+          const v=G.sp*calm*(.3+.7*Math.max(0,G.hp)/G.maxhp);
+          G.pos.x+=Math.sin(G.hd)*v*dt;G.pos.z+=Math.cos(G.hd)*v*dt;G.ph+=v*dt*.32;mv=1;
+          G.atkT=0;
+        }
       }
       if(d>gFar()+140)spawnGiant(G);
     }else if(G.state==='guard'){
@@ -606,11 +634,12 @@ function updateGiants(dt){
     // Skinned skeleton animations
     if(G.mixer) G.mixer.update(dt);
     if(G.state==='chase'||G.state==='run'){
-      if(mv && G.ready){
-        // Run when fast / hurt less; walk otherwise
+      if(G.curAnim==='attack' && G.atkT>0 && G.atkT<1.0){
+        // keep playing hand-hit attack
+      }else if(mv && G.ready){
         const fast = G.sp > 16 || (G.hp/G.maxhp)<0.45;
         playGiantAnim(G, fast && G.actions.run ? 'run' : 'walk', 0.2);
-      }else if(G.ready){
+      }else if(G.ready && G.curAnim!=='attack'){
         playGiantAnim(G, 'idle', 0.3);
       }
     }else if(G.state==='guard' && G.ready){
