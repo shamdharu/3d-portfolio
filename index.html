@@ -950,7 +950,6 @@ function update(dt){
             S.hits=(S.hits||0)+1;
             // visual shake
             S.board.rotation.z=(Math.random()-.5)*0.04;
-            toast(S.hits>=3 ? (S.title||'Billboard')+' collapsing!' : 'Billboard hit '+S.hits+'/3');
             if(S.hits>=3){
               S.fallen=true;
               S.fallT=0;
