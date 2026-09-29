@@ -411,7 +411,7 @@ function animTreasure(dt){
     const sy=Math.max(.03,u);sheet.scale.y=sy;rollT.position.y=SH/2*sy;rollB.position.y=-SH/2*sy}
 }
 // ---------- Gorilla giants ----------
-let gameOver=false,shake=0,dmin=999,gT=0,unionCd=12,kills=0,camSnap=false;
+let gameOver=false,shake=0,dmin=999,gT=0,unionCd=12,kills=0,camSnap=false,cinCam=null;
 const eyeM=new THREE.MeshBasicMaterial({color:0xff2a10,fog:false}),fangM=new THREE.MeshLambertMaterial({color:0xe8e2cf});
 function makeGiant(i){
   const root=new THREE.Group(),pivot=new THREE.Group();root.add(pivot);
@@ -538,7 +538,7 @@ function restart(){
     if(elOver){elOver.style.display='none';elOver.style.pointerEvents='none';}
     unionCd=10;shake=0;dmin=999;cd=0;
     // clear cinematic bullets
-    if(typeof killShots!=='undefined'){while(killShots.length){const k=killShots.pop();if(k.mesh)scene.remove(k.mesh);}}
+    if(typeof killShots!=='undefined'){while(killShots.length){const k=killShots.pop();if(k.mesh)scene.remove(k.mesh);}}cinCam=null;
 
     mouse.down=false;
     // always restart from the beginning
@@ -1015,67 +1015,136 @@ function tracer(a,b){
 })();
 
 function spawnKillBullet(G){
-  // cinematic bullet from nearest gun (or car) into giant chest
+  // dramatic kill: big 3D bullet + camera follows it into the giant
   const from=new THREE.Vector3();
   if(owned[0]&&guns[0])guns[0].getWorldPosition(from);
   else if(owned[1]&&guns[1])guns[1].getWorldPosition(from);
   else from.set(carPos.x, car.position.y+2.2, carPos.z);
-  const to=new THREE.Vector3(G.pos.x, hgt(G.pos.x,G.pos.z)+7, G.pos.z);
+  // start a bit in front of gun so it's visible
+  const to=new THREE.Vector3(G.pos.x, hgt(G.pos.x,G.pos.z)+6.5, G.pos.z);
+  const dir=to.clone().sub(from).normalize();
+  from.addScaledVector(dir, 1.2);
+
   let mesh;
   if(bulletSrc){
     mesh=bulletSrc.clone(true);
-    mesh.traverse(o=>{if(o.isMesh&&o.material){o.material=o.material.clone();o.material.emissive=new THREE.Color(0x553300);}});
+    mesh.traverse(o=>{
+      if(o.isMesh&&o.material){
+        o.material=o.material.clone();
+        o.material.emissive=new THREE.Color(0xaa6600);
+        o.material.emissiveIntensity=1.5;
+        o.material.metalness=0.9;
+        o.material.roughness=0.2;
+      }
+    });
   }else{
     mesh=new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08,0.08,0.6,8),
-      new THREE.MeshStandardMaterial({color:0xe8c060,metalness:0.9,roughness:0.2,emissive:0x443300})
+      new THREE.CylinderGeometry(0.12,0.12,0.9,10),
+      new THREE.MeshStandardMaterial({color:0xffd080,metalness:0.95,roughness:0.15,emissive:0xaa5500})
     );
   }
   mesh.position.copy(from);
   mesh.lookAt(to);mesh.rotateX(Math.PI/2);
-  mesh.scale.setScalar(2.2);
+  mesh.scale.setScalar(4.5); // big so camera can read it
   scene.add(mesh);
-  G.killCin={mesh,from,to,t:0,dur:0.55};
-  killShots.push(G.killCin);
-  // hold death until bullet arrives
+
+  // side vector for orbital camera path
+  const side=new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0,1,0)).normalize();
+  if(side.lengthSq()<0.01) side.set(1,0,0);
+
+  const cin={mesh,from:from.clone(),to:to.clone(),t:0,dur:1.35,G,side,dir:dir.clone(),phase:'fly'};
+  G.killCin=cin;
+  killShots.push(cin);
   G.state='dying';
   G.t=0;
+  // take over camera
+  cinCam=cin;
+  mouse.down=false;
+  snd(220,.1,'square');
 }
 
 function updateKillShots(dt){
   for(let i=killShots.length-1;i>=0;i--){
     const k=killShots[i];
     k.t+=dt;
-    const u=Math.min(1,k.t/k.dur);
-    // ease-in flight
-    const e=u*u;
-    k.mesh.position.lerpVectors(k.from,k.to,e);
-    k.mesh.lookAt(k.to);k.mesh.rotateX(Math.PI/2);
-    // spin
-    k.mesh.rotateY(dt*18);
-    if(u>=1){
-      // impact: flash + death anim
-      shake=Math.max(shake,0.45);
-      snd(90,.18,'sawtooth');
-      scene.remove(k.mesh);
-      killShots.splice(i,1);
-      // find giant that owned this cin
-      for(const G of giants){
-        if(G.killCin===k){
+    if(k.phase==='fly'){
+      const u=Math.min(1,k.t/k.dur);
+      // smoothstep flight
+      const e=u*u*(3-2*u);
+      k.mesh.position.lerpVectors(k.from,k.to,e);
+      k.mesh.lookAt(k.to);
+      k.mesh.rotateX(Math.PI/2);
+      k.mesh.rotateY(dt*22);
+      // slight scale pulse
+      const sc=4.5*(1+Math.sin(u*Math.PI)*0.15);
+      k.mesh.scale.setScalar(sc);
+      if(u>=1){
+        // IMPACT
+        k.phase='impact';
+        k.t=0;
+        k.dur=1.1;
+        shake=Math.max(shake,0.9);
+        snd(70,.25,'sawtooth');
+        // hide bullet, giant starts falling
+        k.mesh.visible=false;
+        const G=k.G;
+        if(G){
           G.killCin=null;
           G.state='fall';G.t=0;
-          if(G.ready)playGiantAnim(G,'death',0.1);
+          G.pivot.rotation.z=0;
+          if(G.ready)playGiantAnim(G,'death',0.08);
           kills++;
           if(typeof killsEl!=='undefined'&&killsEl)killsEl.textContent=kills;
-          break;
         }
+      }
+    }else if(k.phase==='impact'){
+      // hold on giant collapsing
+      if(k.t>=k.dur){
+        scene.remove(k.mesh);
+        killShots.splice(i,1);
+        if(cinCam===k)cinCam=null;
       }
     }
   }
 }
 
-let ac;function snd(f,d,ty){try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();const t=ac.currentTime,o=ac.createOscillator(),g=ac.createGain();o.type=ty;o.frequency.setValueAtTime(f,t);o.frequency.exponentialRampToValueAtTime(40,t+d);g.gain.setValueAtTime(.07,t);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g);g.connect(ac.destination);o.start();o.stop(t+d)}catch(e){}}
-const _g=new THREE.Vector3();
+function updateCinCam(dt){
+  if(!cinCam)return false;
+  const k=cinCam;
+  if(k.phase==='fly'){
+    const u=Math.min(1,k.t/k.dur);
+    const e=u*u*(3-2*u);
+    // camera orbits alongside the bullet
+    const along=new THREE.Vector3().lerpVectors(k.from,k.to,e);
+    const sideOff=k.side.clone().multiplyScalar(3.2+Math.sin(u*Math.PI)*1.2);
+    const upOff=1.4+Math.sin(u*Math.PI)*0.8;
+    const back=k.dir.clone().multiplyScalar(-2.5*(1-u*0.5));
+    camera.position.copy(along).add(sideOff).add(back);
+    camera.position.y+=upOff;
+    // look slightly ahead of bullet toward giant
+    const look=new THREE.Vector3().lerpVectors(k.mesh.position, k.to, 0.35);
+    camera.lookAt(look);
+    camera.fov=48+u*12;
+    camera.updateProjectionMatrix();
+    return true;
+  }
+  if(k.phase==='impact'){
+    const u=Math.min(1,k.t/k.dur);
+    // slow push-in on falling giant
+    const G=k.G;
+    const target=new THREE.Vector3(G.pos.x, hgt(G.pos.x,G.pos.z)+5, G.pos.z);
+    const side=k.side.clone().multiplyScalar(6*(1-u*0.3));
+    const desired=target.clone().add(side).add(new THREE.Vector3(0,3-u, -4));
+    camera.position.lerp(desired, Math.min(1,4*dt));
+    camera.lookAt(target);
+    camera.fov=52;
+    camera.updateProjectionMatrix();
+    return true;
+  }
+  return false;
+}
+
+
 function aimGun(){
   if(!owned[0]&&!owned[1])return;
   camera.updateMatrixWorld();
@@ -1288,15 +1357,20 @@ function update(dt){
   animTreasure(dt);updateGiants(dt);updatePickups(dt);drawMinimap();
 
   const back=new THREE.Vector3(-dir.x*12,6,-dir.z*12).add(car.position);
-  if(camSnap){
+  if(updateCinCam(dt)){
+    // cinematic camera owns the view (bullet flight + impact)
+    if(shake>0){camera.position.x+=(Math.random()-.5)*shake*0.5;camera.position.y+=(Math.random()-.5)*shake*.4}
+  }else if(camSnap){
     camera.position.copy(back);
     camSnap=false;
+    camera.lookAt(carPos.x+dir.x*5,car.position.y+2.2,carPos.z+dir.z*5);
+    camera.fov=62+Math.abs(speed)*0.35;camera.updateProjectionMatrix();
   }else{
     camera.position.lerp(back,Math.min(1,5*dt));
+    if(shake>0){camera.position.x+=(Math.random()-.5)*shake;camera.position.y+=(Math.random()-.5)*shake*.7}
+    camera.lookAt(carPos.x+dir.x*5,car.position.y+2.2,carPos.z+dir.z*5);
+    camera.fov=62+Math.abs(speed)*0.35;camera.updateProjectionMatrix();
   }
-  if(shake>0){camera.position.x+=(Math.random()-.5)*shake;camera.position.y+=(Math.random()-.5)*shake*.7}
-  camera.lookAt(carPos.x+dir.x*5,car.position.y+2.2,carPos.z+dir.z*5);
-  camera.fov=62+Math.abs(speed)*0.35;camera.updateProjectionMatrix();
   shoot(dt);
   sky.position.copy(camera.position);
   sunDisc.position.copy(camera.position).addScaledVector(sunDir,440);
