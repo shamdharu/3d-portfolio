@@ -572,6 +572,7 @@ function restart(){
       G.grace=5;
       G.pivot.rotation.set(0,0,0);
       G.pivot.position.set(0,0,0);
+      G.root.rotation.set(0,0,0);
       G.root.visible=true;
       G.bar.visible=false;
       if(G.mats)G.mats.forEach(m=>{if(m.emissive)m.emissive.setHex(0);});
@@ -717,20 +718,35 @@ function updateGiants(dt){
       if(sd<2){G.state='fall';G.t=0;G.hd=Math.atan2(dx,dz)}
       else{G.hd=Math.atan2(sx,sz);G.pos.x+=sx/sd*40*dt;G.pos.z+=sz/sd*40*dt;G.ph+=40*dt*.32;mv=1}
     }else if(G.state==='dying'){
-      // final breath — hold pose until cinematic bullet arrives
       G.t+=dt;
-      if(G.ready&&G.curAnim!=='hit'&&G.actions.hit){
-        playGiantAnim(G,'hit',0.08);
-      }
-      // slight tremble
-      G.pivot.rotation.z=Math.sin(G.t*20)*0.03;
+      G.pivot.rotation.z=Math.sin(G.t*12)*0.02;
     }else if(G.state==='fall'){
-      G.t+=dt;const a=Math.min(1,G.t/1.8);G.pivot.rotation.x=(Math.PI/2)*a*a;if(G.t>1.8){G.state='lie';G.t=0}
+      G.t+=dt;
+      const a=Math.min(1,G.t/1.6);
+      // tip entire giant over (root) so they clearly fall
+      G.root.rotation.order='YXZ';
+      G.root.rotation.x=a*(Math.PI/2);
+      G.pivot.rotation.x=0;
+      G.pivot.position.y=0;
+      // freeze skeleton so death clip cannot stand them back up
+      if(G.mixer){G.mixer.stopAllAction();G.mixer.update(0);}
+      if(G.t>1.6){G.state='lie';G.t=0}
     }else if(G.state==='lie'){
-      G.t+=dt;if(G.t>5)G.pivot.position.y-=2*dt;if(G.t>10){G.state='gone';G.root.visible=false;G.t=0}
+      G.t+=dt;
+      G.root.rotation.order='YXZ';
+      G.root.rotation.x=Math.PI/2;
+      if(G.mixer)G.mixer.stopAllAction();
+      if(G.t>6)G.pivot.position.y-=1.2*dt;
+      if(G.t>12){G.state='gone';G.root.visible=false;G.t=0}
     }else if(G.state==='gone'){
       G.t+=dt;
-      if(G.t>25&&!tState&&!gameOver){G.hp=G.maxhp;G.state='chase';G.pivot.rotation.x=0;G.pivot.position.y=0;G.root.visible=true;spawnGiant(G,true);G.grace=3}
+      if(G.t>45&&!tState&&!gameOver){
+        G.hp=G.maxhp;G.state='chase';G.deadFrozen=false;
+        G.pivot.rotation.set(0,0,0);G.pivot.position.y=0;
+        G.root.rotation.set(0,0,0);G.root.visible=true;
+        if(G.actions&&G.actions.walk){G.actions.walk.reset().play();G.curAnim='walk';}
+        spawnGiant(G,true);G.grace=5;
+      }
     }
     // Skinned skeleton animations
     if(G.mixer) G.mixer.update(dt);
@@ -745,13 +761,14 @@ function updateGiants(dt){
       }
     }else if(G.state==='guard' && G.ready){
       playGiantAnim(G, 'idle', 0.3);
-    }else if(G.state==='fall' && G.ready){
-      playGiantAnim(G, 'death', 0.15);
+    }else if((G.state==='fall'||G.state==='lie'||G.state==='dying') && G.ready){
+      /* keep death pose — do not restart */
     }
     if(G.flash>0){G.flash-=dt;if(!G.fl){G.mats.forEach(m=>m.emissive.setHex(0x881111));G.fl=1}}else if(G.fl){G.mats.forEach(m=>m.emissive.setHex(0));G.fl=0}
     const showBar=G.hp<G.maxhp&&(G.state==='chase'||G.state==='guard');G.bar.visible=showBar;
     if(showBar){G.fg.scale.x=Math.max(.001,G.hp/G.maxhp);G.bar.lookAt(camera.position)}
-    G.root.position.set(G.pos.x,hgt(G.pos.x,G.pos.z)+0,G.pos.z);G.root.rotation.y=G.hd;
+    G.root.position.set(G.pos.x,hgt(G.pos.x,G.pos.z)+0,G.pos.z);
+    if(G.state==='fall'||G.state==='lie'){G.root.rotation.order='YXZ';G.root.rotation.y=G.hd;/* keep .x tip */}else if(G.state!=='dying'){G.root.rotation.y=G.hd;}
   });
   shake=Math.max(0,(48-dmin)/48)*.6;
   elDanger.style.opacity=gameOver?0:Math.max(0,(60-dmin)/60)*(.6+.4*Math.sin(gT*8));
@@ -960,15 +977,18 @@ function makeBulletMesh(){
 for(let i=0;i<20;i++){const m=makeBulletMesh();m.userData.l=0;trPool.push(m);}
 
 function tracer(a,b){
+  if(!trPool.length)return;
   const m=trPool[trI++%trPool.length];
-  // place bullet at start, orient toward end, short life
   m.position.copy(a);
+  // reset orientation then aim
+  m.rotation.set(0,0,0);
   m.lookAt(b);
-  // bullet model is along Y; orient so Y points toward target
   m.rotateX(Math.PI/2);
-  const dist=a.distanceTo(b);
-  m.userData.l=0.12;
-  m.userData.life=0.12;
+  // keep GLB size (do NOT shrink with setScalar(2.2))
+  const base=(bulletSrc&&bulletSrc.scale.x)||1;
+  m.scale.setScalar(base*1.3);
+  m.userData.l=0.18;
+  m.userData.life=0.18;
   m.userData.from=a.clone();
   m.userData.to=b.clone();
   m.userData.t=0;
@@ -985,7 +1005,7 @@ function tracer(a,b){
       const bb=new THREE.Box3().setFromObject(src);
       const size=bb.getSize(new THREE.Vector3());
       const maxD=Math.max(size.x,size.y,size.z)||1;
-      src.scale.setScalar(2.8/maxD); // readable in-game size
+      src.scale.setScalar(5.5/maxD); // base size for tracers + cinematic parent
       const c=bb.getCenter(new THREE.Vector3()).multiplyScalar(src.scale.x);
       src.position.sub(c);
       src.traverse(o=>{
@@ -1015,52 +1035,78 @@ function tracer(a,b){
 })();
 
 function spawnKillBullet(G){
-  // dramatic kill: big 3D bullet + camera follows it into the giant
   const from=new THREE.Vector3();
   if(owned[0]&&guns[0])guns[0].getWorldPosition(from);
   else if(owned[1]&&guns[1])guns[1].getWorldPosition(from);
   else from.set(carPos.x, car.position.y+2.2, carPos.z);
-  // start a bit in front of gun so it's visible
-  const to=new THREE.Vector3(G.pos.x, hgt(G.pos.x,G.pos.z)+6.5, G.pos.z);
-  const dir=to.clone().sub(from).normalize();
-  from.addScaledVector(dir, 1.2);
+  const to=new THREE.Vector3(G.pos.x, hgt(G.pos.x,G.pos.z)+6.2, G.pos.z);
+  const dir=to.clone().sub(from);
+  const dist=dir.length()||1;
+  dir.multiplyScalar(1/dist);
+  from.addScaledVector(dir, 2.0);
 
-  let mesh;
+  const group=new THREE.Group();
+
+  // PRIMARY: user's 3D bullet GLB
   if(bulletSrc){
-    mesh=bulletSrc.clone(true);
-    mesh.traverse(o=>{
-      if(o.isMesh&&o.material){
-        o.material=o.material.clone();
-        o.material.emissive=new THREE.Color(0xaa6600);
-        o.material.emissiveIntensity=1.5;
-        o.material.metalness=0.9;
-        o.material.roughness=0.2;
+    const bullet=bulletSrc.clone(true);
+    // keep loaded GLB scale, then enlarge for cinematic camera
+    const base=bulletSrc.scale.x||1;
+    bullet.scale.setScalar(base*2.2);
+    bullet.traverse(o=>{
+      if(o.isMesh){
+        o.castShadow=true;
+        o.frustumCulled=false;
+        if(o.material){
+          const mats=Array.isArray(o.material)?o.material:[o.material];
+          const cloned=mats.map(mat=>{
+            const m=mat.clone();
+            if(m.color) m.color.offsetHSL(0,0,0.05);
+            if(m.emissive){m.emissive.setHex(0x553308);}
+            if('metalness' in m) m.metalness=0.85;
+            if('roughness' in m) m.roughness=0.28;
+            return m;
+          });
+          o.material=cloned.length===1?cloned[0]:cloned;
+        }
       }
     });
+    // GLB bullet length is along Y → aim Y at target (-Z of parent after lookAt)
+    bullet.rotation.x=Math.PI/2;
+    group.add(bullet);
   }else{
-    mesh=new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12,0.12,0.9,10),
-      new THREE.MeshStandardMaterial({color:0xffd080,metalness:0.95,roughness:0.15,emissive:0xaa5500})
+    // only if GLB not loaded yet
+    const fallback=new THREE.Mesh(
+      new THREE.CylinderGeometry(0.15,0.2,1.4,10),
+      new THREE.MeshStandardMaterial({color:0xc8a050,metalness:0.9,roughness:0.25,emissive:0x443300})
     );
+    fallback.rotation.x=Math.PI/2;
+    group.add(fallback);
   }
-  mesh.position.copy(from);
-  mesh.lookAt(to);mesh.rotateX(Math.PI/2);
-  mesh.scale.setScalar(4.5); // big so camera can read it
-  scene.add(mesh);
 
-  // side vector for orbital camera path
-  const side=new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0,1,0)).normalize();
+  // soft light so the brass/metal of the real bullet reads on camera
+  const light=new THREE.PointLight(0xffcc88, 1.6, 22);
+  group.add(light);
+
+  group.position.copy(from);
+  group.lookAt(to);
+  scene.add(group);
+
+  const side=new THREE.Vector3().crossVectors(dir,new THREE.Vector3(0,1,0)).normalize();
   if(side.lengthSq()<0.01) side.set(1,0,0);
 
-  const cin={mesh,from:from.clone(),to:to.clone(),t:0,dur:1.35,G,side,dir:dir.clone(),phase:'fly'};
+  const cin={mesh:group,from:from.clone(),to:to.clone(),t:0,dur:2.8,G,side,dir:dir.clone(),phase:'fly',dist};
   G.killCin=cin;
   killShots.push(cin);
   G.state='dying';
   G.t=0;
-  // take over camera
+  if(G.mixer&&G.actions){
+    Object.values(G.actions).forEach(a=>{if(a)try{a.stop();}catch(e){}});
+    if(G.actions.hit){G.actions.hit.reset().setLoop(THREE.LoopOnce,1);G.actions.hit.clampWhenFinished=true;G.actions.hit.play();G.curAnim='hit';}
+  }
   cinCam=cin;
   mouse.down=false;
-  snd(220,.1,'square');
+  snd(240,.12,'square');
 }
 
 function updateKillShots(dt){
@@ -1069,36 +1115,35 @@ function updateKillShots(dt){
     k.t+=dt;
     if(k.phase==='fly'){
       const u=Math.min(1,k.t/k.dur);
-      // smoothstep flight
       const e=u*u*(3-2*u);
       k.mesh.position.lerpVectors(k.from,k.to,e);
       k.mesh.lookAt(k.to);
-      k.mesh.rotateX(Math.PI/2);
-      k.mesh.rotateY(dt*22);
-      // slight scale pulse
-      const sc=4.5*(1+Math.sin(u*Math.PI)*0.15);
-      k.mesh.scale.setScalar(sc);
+      k.mesh.rotateZ(dt*10);
       if(u>=1){
-        // IMPACT
         k.phase='impact';
         k.t=0;
-        k.dur=1.1;
-        shake=Math.max(shake,0.9);
-        snd(70,.25,'sawtooth');
-        // hide bullet, giant starts falling
+        k.dur=1.6;
+        shake=Math.max(shake,1.0);
+        snd(70,.3,'sawtooth');
         k.mesh.visible=false;
         const G=k.G;
         if(G){
           G.killCin=null;
           G.state='fall';G.t=0;
-          G.pivot.rotation.z=0;
-          if(G.ready)playGiantAnim(G,'death',0.08);
+          G.pivot.rotation.set(0,0,0);
+          // stop all anims so model can tip over cleanly
+          if(G.mixer){
+            try{G.mixer.stopAllAction();}catch(e){}
+          }
+          G.curAnim=null;
+          G.deadFrozen=true;
+          G.root.rotation.order='YXZ';
+          G.root.rotation.x=0;
           kills++;
           if(typeof killsEl!=='undefined'&&killsEl)killsEl.textContent=kills;
         }
       }
     }else if(k.phase==='impact'){
-      // hold on giant collapsing
       if(k.t>=k.dur){
         scene.remove(k.mesh);
         killShots.splice(i,1);
@@ -1114,36 +1159,32 @@ function updateCinCam(dt){
   if(k.phase==='fly'){
     const u=Math.min(1,k.t/k.dur);
     const e=u*u*(3-2*u);
-    // camera orbits alongside the bullet
     const along=new THREE.Vector3().lerpVectors(k.from,k.to,e);
-    const sideOff=k.side.clone().multiplyScalar(3.2+Math.sin(u*Math.PI)*1.2);
-    const upOff=1.4+Math.sin(u*Math.PI)*0.8;
-    const back=k.dir.clone().multiplyScalar(-2.5*(1-u*0.5));
-    camera.position.copy(along).add(sideOff).add(back);
-    camera.position.y+=upOff;
-    // look slightly ahead of bullet toward giant
-    const look=new THREE.Vector3().lerpVectors(k.mesh.position, k.to, 0.35);
-    camera.lookAt(look);
-    camera.fov=48+u*12;
+    const ang=u*Math.PI*1.2;
+    const rad=4.5;
+    const side=k.side.clone().multiplyScalar(Math.cos(ang)*rad);
+    const up=Math.sin(ang)*1.8+2.2;
+    const back=k.dir.clone().multiplyScalar(-3.5);
+    camera.position.copy(along).add(side).add(back);
+    camera.position.y=along.y+up;
+    camera.lookAt(k.mesh.position);
+    camera.fov=42;
     camera.updateProjectionMatrix();
     return true;
   }
   if(k.phase==='impact'){
-    const u=Math.min(1,k.t/k.dur);
-    // slow push-in on falling giant
     const G=k.G;
-    const target=new THREE.Vector3(G.pos.x, hgt(G.pos.x,G.pos.z)+5, G.pos.z);
-    const side=k.side.clone().multiplyScalar(6*(1-u*0.3));
-    const desired=target.clone().add(side).add(new THREE.Vector3(0,3-u, -4));
-    camera.position.lerp(desired, Math.min(1,4*dt));
+    if(!G)return false;
+    const target=new THREE.Vector3(G.pos.x, hgt(G.pos.x,G.pos.z)+4, G.pos.z);
+    const desired=target.clone().add(k.side.clone().multiplyScalar(7)).add(new THREE.Vector3(0,4,-5));
+    camera.position.lerp(desired, Math.min(1,3*dt));
     camera.lookAt(target);
-    camera.fov=52;
+    camera.fov=50;
     camera.updateProjectionMatrix();
     return true;
   }
   return false;
 }
-
 
 function aimGun(){
   if(!owned[0]&&!owned[1])return;
@@ -1175,6 +1216,21 @@ function hitBlockStack(m, dirX, dirY, dirZ, force){
   return true;
 }
 
+let ac;
+function snd(f,d,ty){
+  try{
+    ac=ac||new(window.AudioContext||window.webkitAudioContext)();
+    const t=ac.currentTime,o=ac.createOscillator(),g=ac.createGain();
+    o.type=ty||'square';
+    o.frequency.setValueAtTime(f,t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(40,f*0.4),t+d);
+    g.gain.setValueAtTime(0.08,t);
+    g.gain.exponentialRampToValueAtTime(0.001,t+d);
+    o.connect(g);g.connect(ac.destination);
+    o.start(t);o.stop(t+d+0.02);
+  }catch(e){}
+}
+
 function shoot(dt){
   cd-=dt;
   // animate live bullets along their path
@@ -1184,6 +1240,7 @@ function shoot(dt){
       m.userData.t=(m.userData.t||0)+dt;
       const u=Math.min(1,(m.userData.t)/(m.userData.life||0.12));
       m.position.lerpVectors(m.userData.from,m.userData.to,u);
+      m.rotation.set(0,0,0);
       m.lookAt(m.userData.to);m.rotateX(Math.PI/2);
       if(u>=1)m.visible=false;
     }else{
