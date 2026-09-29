@@ -526,15 +526,74 @@ function spawnGiant(g,front){
   g.pos.set(carPos.x+Math.sin(a)*r,0,carPos.z+Math.cos(a)*r);
   g.hd=Math.atan2(carPos.x-g.pos.x,carPos.z-g.pos.z);g.grace=3;
 }
-function caught(){if(gameOver||tState)return;gameOver=true;speed=0;elOver.style.display='flex';mouse.down=false}
-function restart(){
-  gameOver=false;elOver.style.display='none';unionCd=10;
-  const cp=stage>0?STATIONS[stage-1]:{x:0,z:0},nx=STATIONS[stage]||cp;
-  carPos.set(cp.x,0,cp.z);heading=nx===cp?0:Math.atan2(nx.x-cp.x,nx.z-cp.z);speed=0;steer=0;
-  giants.forEach(G=>{G.state='chase';G.hp=G.maxhp;G.pivot.rotation.x=0;G.pivot.position.y=0;G.root.visible=true;G.pivot.rotation.set(0,0,0);G.pivot.position.y=0;if(G.actions&&G.actions.walk){Object.values(G.actions).forEach(a=>a&&a.stop());G.actions.walk.reset().play();G.curAnim='walk';}spawnGiant(G,false);G.grace=4});
-  camera.position.set(carPos.x-Math.sin(heading)*10,5,carPos.z-Math.cos(heading)*10);
+function caught(){
+  if(gameOver||tState)return;
+  gameOver=true;speed=0;mouse.down=false;
+  if(elOver){elOver.style.display='flex';elOver.style.pointerEvents='auto';}
 }
-document.getElementById('retry').addEventListener('click',e=>{restart();e.target.blur()});
+function restart(){
+  try{
+    gameOver=false;
+    if(elOver){elOver.style.display='none';elOver.style.pointerEvents='none';}
+    unionCd=10;shake=0;dmin=999;cd=0;
+    mouse.down=false;
+    const cp=(stage>0&&STATIONS[stage-1])?STATIONS[stage-1]:{x:0,z:0};
+    const nx=STATIONS[stage]||cp;
+    carPos.set(cp.x||0,0,cp.z||0);
+    heading=(nx===cp)?0:Math.atan2((nx.x-cp.x),(nx.z-cp.z));
+    speed=0;steer=0;
+    car.position.set(carPos.x,hgt(carPos.x,carPos.z),carPos.z);
+    car.rotation.set(0,heading,0);
+    giants.forEach(G=>{
+      G.state='chase';
+      G.hp=G.maxhp;
+      G.t=0;G.atkT=0;G.flash=0;G.fl=0;
+      G.grace=5;
+      G.pivot.rotation.set(0,0,0);
+      G.pivot.position.set(0,0,0);
+      G.root.visible=true;
+      G.bar.visible=false;
+      if(G.mats)G.mats.forEach(m=>{if(m.emissive)m.emissive.setHex(0);});
+      // fully reset animation mixer
+      if(G.mixer&&G.actions){
+        Object.keys(G.actions).forEach(k=>{
+          const a=G.actions[k];
+          if(!a)return;
+          try{a.stop();a.reset();a.paused=false;}catch(e){}
+        });
+        if(G.actions.walk){
+          G.actions.walk.enabled=true;
+          G.actions.walk.setEffectiveWeight(1);
+          G.actions.walk.play();
+          G.curAnim='walk';
+        }else{
+          G.curAnim=null;
+        }
+      }
+      spawnGiant(G,false);
+      G.grace=5;
+    });
+    camera.position.set(carPos.x-Math.sin(heading)*12,6,carPos.z-Math.cos(heading)*12);
+    camera.lookAt(carPos.x,carPos.y+2,carPos.z);
+    if(elDanger)elDanger.style.opacity='0';
+    toast('Go!');
+  }catch(err){
+    console.error('restart failed',err);
+    gameOver=false;
+    if(elOver)elOver.style.display='none';
+  }
+}
+document.getElementById('retry').addEventListener('click',function(e){
+  e.preventDefault();e.stopPropagation();
+  restart();
+  if(e.target&&e.target.blur)e.target.blur();
+});
+// also allow keyboard restart when game over
+document.addEventListener('keydown',function(e){
+  if(gameOver&&(e.code==='Enter'||e.code==='Space'||e.code==='KeyR')){
+    e.preventDefault();restart();
+  }
+});
 function killGiants(){
   toast('Treasure unlocked \u2014 the giants have fallen!');
   giants.forEach((G,i)=>{
