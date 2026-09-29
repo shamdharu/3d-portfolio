@@ -318,15 +318,26 @@ STOPS.forEach((s,k)=>{
   {const t=Math.max(20,L-42);plantArrow(prev.x+d.x*t+d.z*13,prev.z+d.z*t-d.x*13,yaw)}
   const b=new THREE.Group(),bx=P.x+d.x*20,bz=P.z+d.z*20;
   b.position.set(bx,hgt(bx,bz),bz);b.rotation.y=Math.atan2(-d.x,-d.z);b.scale.setScalar(1.15);
-  [-14,14].forEach(x=>{const po=new THREE.Mesh(new THREE.BoxGeometry(0.7,4.4,0.7),wood);po.position.set(x,2.2,0);po.castShadow=true;b.add(po);const br=new THREE.Mesh(new THREE.BoxGeometry(0.4,0.4,5.4),wood);br.position.set(x,1.8,-2.5);br.rotation.x=-0.73;br.castShadow=true;b.add(br)});
+  // rigid legs (poles) — store for collision
+  const legs=[];
+  [-14,14].forEach(x=>{
+    const po=new THREE.Mesh(new THREE.BoxGeometry(0.9,4.4,0.9),wood);
+    po.position.set(x,2.2,0);po.castShadow=true;b.add(po);
+    const br=new THREE.Mesh(new THREE.BoxGeometry(0.4,0.4,5.4),wood);
+    br.position.set(x,1.8,-2.5);br.rotation.x=-0.73;br.castShadow=true;b.add(br);
+    legs.push(po);
+  });
   const fr=new THREE.Mesh(new THREE.BoxGeometry(31.6,18.4,0.7),frameM);fr.position.y=13;fr.castShadow=true;b.add(fr);
   const pl=new THREE.Mesh(new THREE.PlaneGeometry(30,16.875),new THREE.MeshBasicMaterial({map:boardTex(s,k),toneMapped:false}));
   pl.position.set(0,13,0.45);b.add(pl);
   [-10,10].forEach(x=>{const l=new THREE.Mesh(new THREE.BoxGeometry(0.9,0.7,1.6),steel);l.position.set(x,23.7,1.2);l.rotation.x=0.4;b.add(l);const gl=new THREE.Mesh(new THREE.BoxGeometry(0.6,0.4,0.1),lampM);gl.position.set(x,23.5,2.0);gl.rotation.x=0.4;b.add(gl)});
   scene.add(b);
-  STATIONS.push({x:P.x,z:P.z,title:s.t});
+  STATIONS.push({x:P.x,z:P.z,title:s.t, board:b, legs:legs, hits:0, fallen:false, fallT:0, fallDir:1});
   prev=P;
 });
+// billboards that can be hit / fall (same refs as STATIONS with board)
+const BOARDS=STATIONS.filter(s=>s.board);
+
 function nearStation(x,z,r){
   if(x*x+z*z<r*r*0.4)return true;
   return STATIONS.some(s=>{const dx=s.x-x,dz=s.z-z;return dx*dx+dz*dz<r*r});
@@ -902,6 +913,63 @@ function update(dt){
   carPos.addScaledVector(dir,speed*dt);
   car.position.set(carPos.x,hgt(carPos.x,carPos.z),carPos.z);
   car.rotation.order='YXZ';car.rotation.set(0,heading,-steer*speed*0.003);
+
+  // --- rigid billboard legs: car collides, 3 hits → board falls ---
+  if(!gameOver){
+    for(const S of BOARDS){
+      if(S.fallen){
+        // tip over animation
+        if(S.fallT<1.2){
+          S.fallT+=dt;
+          const t=Math.min(1,S.fallT/1.1);
+          const ease=t*t*(3-2*t);
+          S.board.rotation.z = S.fallDir * ease * (Math.PI/2);
+          S.board.position.y = hgt(S.board.position.x,S.board.position.z) - ease*2.5;
+        }
+        continue;
+      }
+      // world positions of both legs
+      for(const leg of S.legs){
+        const wp=new THREE.Vector3();
+        leg.getWorldPosition(wp);
+        const dx=carPos.x-wp.x, dz=carPos.z-wp.z;
+        const dist=Math.hypot(dx,dz);
+        const rad=1.35; // collision radius around leg
+        if(dist<rad && Math.abs(speed)>2){
+          // push car back out of leg
+          const nx=dx/(dist||1), nz=dz/(dist||1);
+          carPos.x=wp.x+nx*rad;
+          carPos.z=wp.z+nz*rad;
+          // bounce speed
+          const impact=Math.abs(speed);
+          speed*=-0.35;
+          // register hit (cooldown per board via lastHit time)
+          const now=performance.now();
+          if(!S.lastHit || now-S.lastHit>600){
+            S.lastHit=now;
+            S.hits=(S.hits||0)+1;
+            // visual shake
+            S.board.rotation.z=(Math.random()-.5)*0.04;
+            toast(S.hits>=3 ? (S.title||'Billboard')+' collapsing!' : 'Billboard hit '+S.hits+'/3');
+            if(S.hits>=3){
+              S.fallen=true;
+              S.fallT=0;
+              // fall away from car
+              const fx=wp.x-carPos.x, fz=wp.z-carPos.z;
+              // fallDir: +1 or -1 around local Z of board
+              S.fallDir = (fx*Math.cos(S.board.rotation.y)+fz*Math.sin(S.board.rotation.y))>=0 ? 1 : -1;
+              snd(120,.2,'sawtooth');
+            }else{
+              snd(180,.08,'square');
+            }
+          }
+          break;
+        }
+      }
+    }
+    // resync car mesh after any leg push
+    car.position.set(carPos.x,hgt(carPos.x,carPos.z),carPos.z);
+  }
 
   for(const list of chunks.values())for(const m of list){
     const d=m.userData,p=m.position;
