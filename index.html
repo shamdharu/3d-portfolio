@@ -958,8 +958,8 @@ function updatePickups(){
 const ray=new THREE.Raycaster(),mNDC=new THREE.Vector2(),trPool=[],_o=new THREE.Vector3(),_e=new THREE.Vector3(),_v=new THREE.Vector3(),_tmp=new THREE.Vector3(),_g=new THREE.Vector3();let trI=0;
 let bulletSrc=null; // loaded 3D bullet prototype
 // bullet visual size multipliers (applied to the normalised GLB scale)
-const TRACER_SZ=0.95; // normal fired bullets (was 1.3)
-const KILL_SZ=1.3;    // cinematic kill bullet (was 2.2)
+const TRACER_SZ=0.7; // normal fired bullets (was 1.3, then 0.95)
+const KILL_SZ=0.9;   // cinematic kill bullet (was 2.2, then 1.3)
 const killShots=[]; // cinematic kill bullets {mesh,from,to,t,dur,G}
 
 function makeBulletMesh(){
