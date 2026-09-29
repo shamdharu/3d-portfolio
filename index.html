@@ -1120,7 +1120,7 @@ function updateKillShots(dt){
       const u=Math.min(1,k.t/k.dur);
       const e=u*u*(3-2*u);
       k.mesh.position.lerpVectors(k.from,k.to,e);
-      k.mesh.lookAt(k.to);
+      // aim was set once at spawn (path is a straight line), so roll accumulates smoothly
       k.mesh.rotateZ(dt*10);
       if(u>=1){
         k.phase='impact';
@@ -1418,8 +1418,7 @@ function update(dt){
 
   const back=new THREE.Vector3(-dir.x*12,6,-dir.z*12).add(car.position);
   if(updateCinCam(dt)){
-    // cinematic camera owns the view (bullet flight + impact)
-    if(shake>0){camera.position.x+=(Math.random()-.5)*shake*0.5;camera.position.y+=(Math.random()-.5)*shake*.4}
+    // cinematic camera owns the view (bullet flight + impact) — kept steady, no shake
   }else if(camSnap){
     camera.position.copy(back);
     camSnap=false;
