@@ -37,7 +37,7 @@ canvas{display:block}
 <div class="btn" id="bb" style="right:94px">▼</div>
 <canvas id="mm" width="320" height="320"></canvas>
 <div id="danger"></div><div id="toast"></div>
-<div id="over"><div class="card"><div class="kick">💀 Caught!</div><p>The Colossus got you. Grab a weapon and shoot them — hits slow them down!</p><button id="retry">Try again</button></div></div>
+<div id="over"><div class="card"><div class="kick">💀 Caught!</div><p>The Colossus got you</p><button id="retry">Try again</button></div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/SkeletonUtils.js"></script>
@@ -411,7 +411,8 @@ function animTreasure(dt){
     const sy=Math.max(.03,u);sheet.scale.y=sy;rollT.position.y=SH/2*sy;rollB.position.y=-SH/2*sy}
 }
 // ---------- Gorilla giants ----------
-let gameOver=false,shake=0,dmin=999,gT=0,unionCd=12,kills=0,camSnap=false,cinCam=null;
+let gameOver=false,shake=0,shakeKick=0,dmin=999,gT=0,unionCd=12,kills=0,camSnap=false,cinCam=null;
+const camBase=new THREE.Vector3(); // shake-free camera follow position (shake is added on top)
 const eyeM=new THREE.MeshBasicMaterial({color:0xff2a10,fog:false}),fangM=new THREE.MeshLambertMaterial({color:0xe8e2cf});
 function makeGiant(i){
   const root=new THREE.Group(),pivot=new THREE.Group();root.add(pivot);
@@ -420,10 +421,11 @@ function makeGiant(i){
   const bgP=new THREE.Mesh(new THREE.PlaneGeometry(6.4,.9),bm),fg=new THREE.Mesh(new THREE.PlaneGeometry(6,.6).translate(3,0,0),fm);
   fg.position.set(-3,0,.05);bgP.renderOrder=20;fg.renderOrder=21;bar.add(bgP,fg);bar.position.y=17;bar.visible=false;root.add(bar);
   root.scale.setScalar(1.0);scene.add(root);
-  return{root,pivot,bar,fg,bodyM,mats:[bodyM],fl:0,flash:0,hp:14,maxhp:14,pos:new THREE.Vector3(),hd:0,sp:9+i*1.2,ph:i*2.1,state:'chase',grace:0,t:0,spot:null,ready:false,mixer:null,actions:{},curAnim:null,killCin:null};
+  return{root,pivot,bar,fg,bodyM,mats:[bodyM],fl:0,flash:0,hp:14,maxhp:14,pos:new THREE.Vector3(),hd:0,sp:11+i*1.3,slot:i,ph:i*2.1,state:'chase',grace:0,t:0,spot:null,ready:false,mixer:null,actions:{},curAnim:null,killCin:null};
 }
 
-const giants=[0,1].map(makeGiant);
+// 4 giants, scattered around the horizon (see spawnGiant)
+const giants=[0,1,2,3].map(makeGiant);
 (function(){
   const bin=atob(GLB_B64),u=new Uint8Array(bin.length);for(let k=0;k<bin.length;k++)u[k]=bin.charCodeAt(k);
   new THREE.GLTFLoader().parse(u.buffer,'',gltf=>{
@@ -523,7 +525,23 @@ const gFar=()=>420-Math.min(stage,8)*20;
 function spawnGiant(g,front){
   const st=Math.min(stage,8),f=front===undefined?Math.random()<.55:front;
   const spread=Math.max(.5,3.1-st*.32);
-  const a=f?heading+(Math.random()-.5)*spread:Math.random()*6.28,r=gFar()+Math.random()*50;
+  // scatter them: each giant owns a slice of the horizon and its own distance band,
+  // then we re-roll if the spot lands within 70 m of another giant (never a clump)
+  const N=Math.max(1,giants.length),slot=(g.slot||0)%N,fan=N>1?slot/(N-1)-.5:0;
+  const r=gFar()+30+slot*(90/Math.max(1,N-1))+Math.random()*35;
+  let a=0;
+  for(let k=0;k<6;k++){
+    a=f?heading+fan*spread+(Math.random()-.5)*.4
+       :(slot/N)*6.2832+(Math.random()-.5)*.9;
+    const px=carPos.x+Math.sin(a)*r,pz=carPos.z+Math.cos(a)*r;
+    let ok=true;
+    for(const o of giants){
+      if(o===g)continue;
+      const dx=px-o.pos.x,dz=pz-o.pos.z;
+      if(dx*dx+dz*dz<70*70){ok=false;break}
+    }
+    if(ok)break;
+  }
   g.pos.set(carPos.x+Math.sin(a)*r,0,carPos.z+Math.cos(a)*r);
   g.hd=Math.atan2(carPos.x-g.pos.x,carPos.z-g.pos.z);g.grace=3;
 }
@@ -536,7 +554,7 @@ function restart(){
   try{
     gameOver=false;
     if(elOver){elOver.style.display='none';elOver.style.pointerEvents='none';}
-    unionCd=10;shake=0;dmin=999;cd=0;
+    unionCd=10;shake=0;shakeKick=0;dmin=999;cd=0;
     // clear cinematic bullets
     if(typeof killShots!=='undefined'){while(killShots.length){const k=killShots.pop();if(k.mesh)scene.remove(k.mesh);}}cinCam=null;
 
@@ -623,9 +641,10 @@ document.addEventListener('keydown',function(e){
 });
 function killGiants(){
   toast('Treasure unlocked \u2014 the giants have fallen!');
+  const n=Math.max(1,giants.length);
   giants.forEach((G,i)=>{
     if(G.state!=='chase'&&G.state!=='guard')return;
-    const a=heading+(i-2)*.5,r=17+(i%2)*6;G.spot=new THREE.Vector3(carPos.x+Math.sin(a)*r,0,carPos.z+Math.cos(a)*r);
+    const a=heading+(i-(n-1)/2)*.5,r=22+(i%3)*7;G.spot=new THREE.Vector3(carPos.x+Math.sin(a)*r,0,carPos.z+Math.cos(a)*r);
     const ox=G.pos.x-G.spot.x,oz=G.pos.z-G.spot.z,od=Math.hypot(ox,oz);
     if(od>100){G.pos.x=G.spot.x+ox/od*100;G.pos.z=G.spot.z+oz/od*100}
     G.state='run';G.t=0;G.pivot.rotation.x=0;G.pivot.position.y=0;
@@ -656,7 +675,7 @@ function playGiantAnim(G, name, fade=0.25){
 
 function updateGiants(dt){
   gT+=dt;let calm=1;
-  for(const s of STATIONS)if(!s.tr&&Math.hypot(s.x-carPos.x,s.z-carPos.z)<55){calm=.2;break}
+  for(const s of STATIONS)if(!s.tr&&Math.hypot(s.x-carPos.x,s.z-carPos.z)<55){calm=.4;break}
   dmin=999;unionCd-=dt;
   // union: when all 5 gather together, 2 stand guard and 3 keep chasing
   const al=giants.filter(G=>G.state==='chase'||G.state==='guard');
@@ -676,10 +695,10 @@ function updateGiants(dt){
       if(gameOver&&G.ready){G.pivot.rotation.x=0.3+Math.sin(gT*6)*.1;G.torso.rotation.z=Math.sin(gT*5)*.15}
       else if(G.grace>0)G.grace-=dt;
       else{
-        let df=Math.atan2(dx,dz)-G.hd;df=Math.atan2(Math.sin(df),Math.cos(df));G.hd+=Math.max(-1.5*dt,Math.min(1.5*dt,df));
+        let df=Math.atan2(dx,dz)-G.hd;df=Math.atan2(Math.sin(df),Math.cos(df));G.hd+=Math.max(-1.8*dt,Math.min(1.8*dt,df));
         // close range: slow in and swing with hand
         if(d<11){
-          const v=Math.min(G.sp*0.55, 8)*calm;
+          const v=Math.min(G.sp*0.62, 9.5)*calm;
           G.pos.x+=Math.sin(G.hd)*v*dt;G.pos.z+=Math.cos(G.hd)*v*dt;
           mv=0; // use attack anim, not walk
           if(G.ready&&G.actions.attack){
@@ -700,7 +719,7 @@ function updateGiants(dt){
             caught();
           }
         }else{
-          const v=G.sp*calm*(.3+.7*Math.max(0,G.hp)/G.maxhp);
+          const v=G.sp*calm*(.45+.55*Math.max(0,G.hp)/G.maxhp);
           G.pos.x+=Math.sin(G.hd)*v*dt;G.pos.z+=Math.cos(G.hd)*v*dt;G.ph+=v*dt*.32;mv=1;
           G.atkT=0;
         }
@@ -754,7 +773,7 @@ function updateGiants(dt){
       if(G.curAnim==='attack' && G.atkT>0 && G.atkT<1.0){
         // keep playing hand-hit attack
       }else if(mv && G.ready){
-        const fast = G.sp > 16 || (G.hp/G.maxhp)<0.45;
+        const fast = G.sp > 13 || (G.hp/G.maxhp)<0.45;
         playGiantAnim(G, fast && G.actions.run ? 'run' : 'walk', 0.2);
       }else if(G.ready && G.curAnim!=='attack'){
         playGiantAnim(G, 'idle', 0.3);
@@ -770,7 +789,10 @@ function updateGiants(dt){
     G.root.position.set(G.pos.x,hgt(G.pos.x,G.pos.z)+0,G.pos.z);
     if(G.state==='fall'||G.state==='lie'){G.root.rotation.order='YXZ';G.root.rotation.y=G.hd;/* keep .x tip */}else if(G.state!=='dying'){G.root.rotation.y=G.hd;}
   });
-  shake=Math.max(0,(48-dmin)/48)*.6;
+  // smooth, decaying camera tremor: proximity rumble + a one-shot kick on a kill
+  // impact. Never per-frame random, so it rumbles instead of jittering.
+  shakeKick=Math.max(0,shakeKick-2.4*dt);
+  shake=Math.max(Math.max(0,(30-dmin)/30)*.14, shakeKick*.4);
   elDanger.style.opacity=gameOver?0:Math.max(0,(60-dmin)/60)*(.6+.4*Math.sin(gT*8));
 }
 // ---------- Retro round minimap ----------
@@ -858,20 +880,39 @@ function updateTumble(dt){
 
 // Controls
 const keys={},mouse={x:0,y:0,down:false};
-addEventListener('keydown',e=>{keys[e.code]=true;if(e.code==='KeyR'){gameOver?restart():resetCar()}if(e.code==='Space')e.preventDefault();
+// arrow/space keys always belong to the game (never scroll the page/preview pane)
+const NO_SCROLL={ArrowUp:1,ArrowDown:1,ArrowLeft:1,ArrowRight:1,Space:1,PageUp:1,PageDown:1,Home:1,End:1};
+addEventListener('keydown',e=>{keys[e.code]=true;if(NO_SCROLL[e.code])e.preventDefault();
+  if(e.code==='KeyR'){gameOver?restart():resetCar()}
   });
 addEventListener('keyup',e=>keys[e.code]=false);
+// never leave a key stuck down when the window/preview loses focus
+addEventListener('blur',()=>{mouse.down=false;for(const k in keys)keys[k]=false;});
 [['bl','KeyA'],['br','KeyD'],['bg','KeyW'],['bb','KeyS']].forEach(([id,code])=>{
   const el=document.getElementById(id);
   el.addEventListener('pointerdown',e=>{keys[code]=true;e.preventDefault()});
   ['pointerup','pointercancel','pointerleave'].forEach(ev=>el.addEventListener(ev,()=>keys[code]=false));
 });
-addEventListener('pointermove',e=>{if(e.pointerType==='mouse'){mouse.x=e.clientX/innerWidth*2-1;mouse.y=-(e.clientY/innerHeight)*2+1}});
-addEventListener('pointerdown',e=>{if(e.pointerType==='mouse'&&e.button===0&&e.target.tagName!=='BUTTON')mouse.down=true});
-addEventListener('pointerup',e=>{if(e.pointerType==='mouse')mouse.down=false});
-addEventListener('blur',()=>mouse.down=false);
+// Aiming: canvas-relative, and it works for mouse, pen AND touch drags — so it keeps
+// working while the drive keys are held, inside a preview pane, or on a touch screen.
+function aimAt(cx,cy){
+  const r=renderer.domElement.getBoundingClientRect();
+  const w=r.width||innerWidth,h=r.height||innerHeight;
+  mouse.x=Math.max(-1,Math.min(1,((cx-r.left)/w)*2-1));
+  mouse.y=Math.max(-1,Math.min(1,-((cy-r.top)/h)*2+1));
+}
+addEventListener('mousemove',e=>aimAt(e.clientX,e.clientY));
+addEventListener('pointermove',e=>aimAt(e.clientX,e.clientY)); // mouse, pen OR touch drag
+addEventListener('pointerdown',e=>{if(e.pointerType!=='touch'&&e.button===0&&e.target.tagName!=='BUTTON')mouse.down=true});
+addEventListener('pointerup',e=>{if(e.pointerType!=='touch')mouse.down=false});
+addEventListener('pointercancel',()=>mouse.down=false);
+// a native drag or text selection would swallow the pointer stream mid-aim
+addEventListener('dragstart',e=>e.preventDefault());
+addEventListener('selectstart',e=>e.preventDefault());
+// fire button: only fires — it must NOT pin the aim, otherwise the weapon stops
+// following the finger/mouse while the button is held (aim still defaults to centre)
 {const f=document.getElementById('bf');
- f.addEventListener('pointerdown',e=>{mouse.x=0;mouse.y=0.05;mouse.down=true;e.preventDefault()});
+ f.addEventListener('pointerdown',e=>{mouse.down=true;e.preventDefault()});
  ['pointerup','pointercancel','pointerleave'].forEach(ev=>f.addEventListener(ev,()=>mouse.down=false))}
 
 const carPos=new THREE.Vector3(0,0,0);
@@ -956,10 +997,12 @@ function updatePickups(){
   });
 }
 const ray=new THREE.Raycaster(),mNDC=new THREE.Vector2(),trPool=[],_o=new THREE.Vector3(),_e=new THREE.Vector3(),_v=new THREE.Vector3(),_tmp=new THREE.Vector3(),_g=new THREE.Vector3();let trI=0;
-let bulletSrc=null; // loaded 3D bullet prototype
-// bullet visual size multipliers (applied to the normalised GLB scale)
-const TRACER_SZ=0.7; // normal fired bullets (was 1.3, then 0.95)
-const KILL_SZ=0.9;   // cinematic kill bullet (was 2.2, then 1.3)
+const UPV=new THREE.Vector3(0,1,0); // world up, used by the cinematic camera orbit
+let bulletSrc=null; // loaded 3D bullet prototype (holder group: scale 1 = 1 world unit long)
+// bullet visual sizes in WORLD UNITS (metres) — applied to the normalised model
+const TRACER_LEN=0.9; // normal fired bullets (~0.9 m long)
+const KILL_LEN=1.8;   // cinematic kill bullet (~1.8 m long)
+const BULLET_SPIN=12; // rad/s roll about its own axis — the bullet spins AND flies straight
 const killShots=[]; // cinematic kill bullets {mesh,from,to,t,dur,G}
 
 function makeBulletMesh(){
@@ -970,9 +1013,9 @@ function makeBulletMesh(){
     scene.add(m);
     return m;
   }
-  // fallback cylinder until model loads
+  // fallback cylinder until model loads (1 unit long, same as the normalised GLB)
   const m=new THREE.Mesh(
-    new THREE.CylinderGeometry(0.04,0.04,0.35,6),
+    new THREE.CylinderGeometry(0.15,0.13,1,8),
     new THREE.MeshStandardMaterial({color:0xc0a050,metalness:0.8,roughness:0.3,emissive:0x332200})
   );
   m.visible=false;scene.add(m);return m;
@@ -987,9 +1030,8 @@ function tracer(a,b){
   m.rotation.set(0,0,0);
   m.lookAt(b);
   m.rotateX(Math.PI/2);
-  // normal fired bullet — smaller tracer size (TRACER_SZ)
-  const base=(bulletSrc&&bulletSrc.scale.x)||1;
-  m.scale.setScalar(base*TRACER_SZ);
+  // normal fired bullet — flies dead straight to the hit point, TRACER_LEN long
+  m.scale.setScalar(TRACER_LEN);
   m.userData.l=0.18;
   m.userData.life=0.18;
   m.userData.from=a.clone();
@@ -1008,7 +1050,7 @@ function tracer(a,b){
       const bb=new THREE.Box3().setFromObject(src);
       const size=bb.getSize(new THREE.Vector3());
       const maxD=Math.max(size.x,size.y,size.z)||1;
-      src.scale.setScalar(5.5/maxD); // base size for tracers + cinematic parent
+      src.scale.setScalar(1/maxD); // normalise inside the holder: model length = 1 unit
       const c=bb.getCenter(new THREE.Vector3()).multiplyScalar(src.scale.x);
       src.position.sub(c);
       src.traverse(o=>{
@@ -1022,15 +1064,19 @@ function tracer(a,b){
           }
         }
       });
-      bulletSrc=src;
+      // holder keeps scale 1, so callers can scale directly in world units
+      // (TRACER_LEN / KILL_LEN) — same convention as the fallback cylinders
+      const holder=new THREE.Group();
+      holder.add(src);
+      bulletSrc=holder;
       // rebuild pool with real model
       trPool.forEach(old=>{
         scene.remove(old);
       });
       trPool.length=0;
       for(let i=0;i<20;i++){
-        const m=src.clone(true);
-        m.visible=false;m.userData.l=0;scene.add(m);trPool.push(m);
+        const m=makeBulletMesh();
+        m.userData.l=0;trPool.push(m);
       }
       console.log('3D bullet loaded');
     },err=>console.error('bullet GLB failed',err));
@@ -1053,9 +1099,8 @@ function spawnKillBullet(G){
   // PRIMARY: user's 3D bullet GLB
   if(bulletSrc){
     const bullet=bulletSrc.clone(true);
-    // keep loaded GLB scale, but much smaller than before (KILL_SZ)
-    const base=bulletSrc.scale.x||1;
-    bullet.scale.setScalar(base*KILL_SZ);
+    // small bullet-time size (KILL_LEN world units)
+    bullet.scale.setScalar(KILL_LEN);
     bullet.traverse(o=>{
       if(o.isMesh){
         o.castShadow=true;
@@ -1080,10 +1125,11 @@ function spawnKillBullet(G){
   }else{
     // only if GLB not loaded yet
     const fallback=new THREE.Mesh(
-      new THREE.CylinderGeometry(0.15,0.2,1.4,10),
+      new THREE.CylinderGeometry(0.15,0.2,1,10),
       new THREE.MeshStandardMaterial({color:0xc8a050,metalness:0.9,roughness:0.25,emissive:0x443300})
     );
     fallback.rotation.x=Math.PI/2;
+    fallback.scale.setScalar(KILL_LEN);
     group.add(fallback);
   }
 
@@ -1119,14 +1165,16 @@ function updateKillShots(dt){
     if(k.phase==='fly'){
       const u=Math.min(1,k.t/k.dur);
       const e=u*u*(3-2*u);
+      // perfectly straight flight: the path is a lerp along one line, the orientation
+      // was locked at spawn, and the only rotation below is a roll about the flight
+      // axis (the group's local Z, which points along the path) — so it spins AND goes
       k.mesh.position.lerpVectors(k.from,k.to,e);
-      // aim was set once at spawn (path is a straight line), so roll accumulates smoothly
-      k.mesh.rotateZ(dt*10);
+      k.mesh.rotateZ(dt*BULLET_SPIN);
       if(u>=1){
         k.phase='impact';
         k.t=0;
         k.dur=1.6;
-        shake=Math.max(shake,1.0);
+        shakeKick=0.55;
         snd(70,.3,'sawtooth');
         k.mesh.visible=false;
         const G=k.G;
@@ -1164,13 +1212,16 @@ function updateCinCam(dt){
     const e=u*u*(3-2*u);
     const along=new THREE.Vector3().lerpVectors(k.from,k.to,e);
     const ang=u*Math.PI*1.2;
-    const rad=4.5;
-    const side=k.side.clone().multiplyScalar(Math.cos(ang)*rad);
-    const up=Math.sin(ang)*1.8+2.2;
-    const back=k.dir.clone().multiplyScalar(-3.5);
-    camera.position.copy(along).add(side).add(back);
-    camera.position.y=along.y+up;
-    camera.lookAt(k.mesh.position);
+    // Orbit the bullet at a CONSTANT radius. The old code let the distance swing
+    // between ~4.4 m and ~5.7 m, which changed the bullet's on-screen size as the
+    // camera swung around it and read as the bullet shaking forward/back.
+    const orbit=new THREE.Vector3()
+      .addScaledVector(k.side,Math.cos(ang))
+      .addScaledVector(UPV,0.30+Math.sin(ang)*0.45)
+      .addScaledVector(k.dir,-0.72)
+      .normalize().multiplyScalar(6.2);
+    camera.position.copy(along).add(orbit);
+    camera.lookAt(along); // same-frame bullet position -> perfectly steady
     camera.fov=42;
     camera.updateProjectionMatrix();
     return true;
@@ -1245,12 +1296,14 @@ function shoot(dt){
       m.position.lerpVectors(m.userData.from,m.userData.to,u);
       m.rotation.set(0,0,0);
       m.lookAt(m.userData.to);m.rotateX(Math.PI/2);
+      // spin about its own length axis (after rotateX the local Y *is* the flight axis)
+      m.rotateY((m.userData.t||0)*BULLET_SPIN);
       if(u>=1)m.visible=false;
     }else{
       m.userData.l-=dt;if(m.userData.l<=0)m.visible=false;
     }
   }
-  updateKillShots(dt);
+  // (cinematic bullets are advanced by update() before the camera reads them)
   aimGun();if(!mouse.down||gameOver||cd>0)return;
   if(!owned[0]&&!owned[1]){toast('No weapon yet');cd=3;return}
   if(ammo<=0){toast('Out of ammo');cd=2;return}
@@ -1415,18 +1468,29 @@ function update(dt){
     if(T.tr){if(dist<10)openTreasure()}else if(dist<14)stage++;
   }else navEl.textContent='Treasure found! Keep smashing blocks';
   animTreasure(dt);updateGiants(dt);updatePickups(dt);drawMinimap();
+  // cinematic bullet advances BEFORE the camera reads it: same-frame state, so the
+  // camera never looks at a stale bullet position (that one-frame lag made the
+  // bullet bob forward/back in the frame)
+  updateKillShots(dt);
 
   const back=new THREE.Vector3(-dir.x*12,6,-dir.z*12).add(car.position);
   if(updateCinCam(dt)){
     // cinematic camera owns the view (bullet flight + impact) — kept steady, no shake
   }else if(camSnap){
+    camBase.copy(back);
     camera.position.copy(back);
     camSnap=false;
     camera.lookAt(carPos.x+dir.x*5,car.position.y+2.2,carPos.z+dir.z*5);
     camera.fov=62+Math.abs(speed)*0.35;camera.updateProjectionMatrix();
   }else{
-    camera.position.lerp(back,Math.min(1,5*dt));
-    if(shake>0){camera.position.x+=(Math.random()-.5)*shake;camera.position.y+=(Math.random()-.5)*shake*.7}
+    // follow position is smoothed on its own, so the shake never feeds back into it
+    camBase.lerp(back,Math.min(1,5*dt));
+    if(shake>0){
+      // smooth low-frequency sine tremor (not per-frame random) — a rumble, no jitter
+      camera.position.set(camBase.x+Math.sin(gT*22)*shake,
+                          camBase.y+Math.cos(gT*19)*shake*.7,
+                          camBase.z+Math.sin(gT*17+1.7)*shake*.5);
+    }else camera.position.copy(camBase);
     camera.lookAt(carPos.x+dir.x*5,car.position.y+2.2,carPos.z+dir.z*5);
     camera.fov=62+Math.abs(speed)*0.35;camera.updateProjectionMatrix();
   }
@@ -1443,6 +1507,7 @@ function update(dt){
 
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
 camera.position.set(0,5,-10);
+camBase.copy(camera.position);
 for(let i=0;i<9;i++)makeTumble();
 giants.forEach(g=>{spawnGiant(g);g.grace=8});
 updateChunks();updateGround(0,0);
